@@ -13,8 +13,8 @@ def freeze_graph(output_graph):
 
     # 指定输出的节点名称,该节点名称必须是原模型中存在的节点
     output_node_names = "output/distance,accuracy/accuracy,accuracy/temp_sim"
-    input_checkpoint = "F:\python_work\siamese-lstm-network\deep-siamese-text-similarity\\runs\\1545200451\checkpoints\model-18000.meta"
-    model_path = 'F:\python_work\siamese-lstm-network\deep-siamese-text-similarity\\runs\\1545200451\checkpoints\model-18000' # 数据路径
+    input_checkpoint = "F:\python_work\siamese-lstm-network\deep-siamese-text-similarity\\runs\\1546075513\checkpoints\model-485000.meta"
+    model_path = 'F:\python_work\siamese-lstm-network\deep-siamese-text-similarity\\runs\\1546075513\checkpoints\model-485000' # 数据路径
 
     saver = tf.train.import_meta_graph(input_checkpoint, clear_devices=False)
     graph = tf.get_default_graph()  # 获得默认的图
@@ -31,4 +31,4 @@ def freeze_graph(output_graph):
         print("%d ops in the final graph." % len(output_graph_def.node))  # 得到当前图有几个操作节点
 
 
-freeze_graph("./model-2018-12-19.pb")
+freeze_graph("./model-2019-01-03-V1.pb")

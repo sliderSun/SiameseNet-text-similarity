@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 import numpy as np
 import tensorflow as tf
+from sklearn.metrics import recall_score, f1_score
 from tensorflow.python.platform import gfile
 
 from utils.input_helpers import InputHelper
@@ -11,12 +12,9 @@ from utils.input_helpers import InputHelper
 # Eval Parameters
 tf.flags.DEFINE_integer("batch_size", 64, "Batch Size (default: 64)")
 tf.flags.DEFINE_string("checkpoint_dir", "", "Checkpoint directory from training run")
-tf.flags.DEFINE_string("eval_filepath", "dev.txt0", "Evaluate on this data (Default: None)")
-tf.flags.DEFINE_string("vocab_filepath", "runs/1545200451/checkpoints/vocab",
+tf.flags.DEFINE_string("eval_filepath", "../data/dev.txt0", "Evaluate on this data (Default: None)")
+tf.flags.DEFINE_string("vocab_filepath", "../runs/1546075513/checkpoints/vocab_",
                        "Load training time vocabulary (Default: None)")
-# tf.flags.DEFINE_string("model", "runs/1544606618/checkpoints/model-7000",
-#                        "Load trained model checkpoint (Default: None)")
-
 # Misc Parameters
 tf.flags.DEFINE_boolean("allow_soft_placement", True, "Allow device soft device placement")
 tf.flags.DEFINE_boolean("log_device_placement", False, "Log placement of ops on devices")
@@ -31,8 +29,8 @@ session_conf = tf.ConfigProto(
     log_device_placement=FLAGS.log_device_placement)
 
 sess = tf.Session()
-with gfile.FastGFile(
-        'F:\python_work\siamese-lstm-network\deep-siamese-text-similarity\model-2018-12-19.pb',
+with tf.gfile.GFile(
+        'F:\python_work\siamese-lstm-network\deep-siamese-text-similarity\\utils\model-2019-01-03-V1.pb',
         'rb') as f:  # 加载模型
     graph_def = tf.GraphDef()
     graph_def.ParseFromString(f.read())
@@ -66,6 +64,7 @@ for db in batches:
     all_predictions = np.concatenate([all_predictions, batch_predictions])
     all_d = np.concatenate([all_d, batch_sim])
     print("DEV acc {}".format(batch_acc))
-for ex in all_predictions:
     correct_predictions = float(np.mean(all_d == y_test))
+    # recall = recall_score(y_test, all_d, average='binary')
+    # f1score = f1_score(y_test, all_d, average='binary')
     print("Accuracy: {:g}".format(correct_predictions))

@@ -13,7 +13,7 @@ class InputHelper(object):
 
     def getVocab(self, vocab_path, max_document_length, filter_h_pad):
         if self.vocab_processor is None:
-            print('locading vocab')
+            print('locading vocab_')
             vocab_processor = MyVocabularyProcessor(max_document_length - filter_h_pad, min_frequency=0)
             self.vocab_processor = vocab_processor.restore(vocab_path)
         return self.vocab_processor
@@ -46,11 +46,18 @@ class InputHelper(object):
         x1 = []
         x2 = []
         y = []
+        x1_negative = []
+        x2_negative = []
+        y_negative = []
         # positive samples from file
         for line in open(filepath, encoding="utf-8"):
             l = line.strip().split("\t")
             if len(l) < 2:
                 continue
+            if l[2] == "0":
+                x1_negative.append(l[0].lower())
+                x2_negative.append(l[1].lower())
+                y_negative.append(l[2])
             if random() > 0.5:
                 x1.append(l[0].lower())
                 x2.append(l[1].lower())
@@ -67,6 +74,10 @@ class InputHelper(object):
             x1.append(combined[i])
             x2.append(combined_shuff[i])
             y.append(0)  # np.array([1,0]))
+        for i in range(len(x1_negative)):
+            x1.append(x1_negative[i])
+            x2.append(x2_negative[i])
+            y.append(y_negative[i])
         return np.asarray(x1), np.asarray(x2), np.asarray(y)
 
     def getTsvTestData(self, filepath):

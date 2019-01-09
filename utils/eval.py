@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import tensorflow as tf
+from sklearn.metrics import precision_score, recall_score, f1_score
 
 from utils.input_helpers import InputHelper
 
@@ -12,10 +13,10 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 # Eval Parameters
 tf.flags.DEFINE_integer("batch_size", 64, "Batch Size (default: 64)")
 tf.flags.DEFINE_string("checkpoint_dir", "", "Checkpoint directory from training run")
-tf.flags.DEFINE_string("eval_filepath", "dev.txt0", "Evaluate on this data (Default: None)")
-tf.flags.DEFINE_string("vocab_filepath", "runs/1545200451/checkpoints/vocab",
+tf.flags.DEFINE_string("eval_filepath", "../data/dev.txt0", "Evaluate on this data (Default: None)")
+tf.flags.DEFINE_string("vocab_filepath", "../runs/1547013084/checkpoints/vocab_",
                        "Load training time vocabulary (Default: None)")
-tf.flags.DEFINE_string("model", "runs/1545200451/checkpoints/model-18000",
+tf.flags.DEFINE_string("model", "../runs/1547013084/checkpoints/model-1000",
                        "Load trained model checkpoint (Default: None)")
 
 # Misc Parameters
@@ -82,7 +83,7 @@ with graph.as_default():
             all_predictions = np.concatenate([all_predictions, batch_predictions])
             all_d = np.concatenate([all_d, batch_sim])
             print("DEV acc {}".format(batch_acc))
-        for ex in all_predictions:
-            print(ex)
         correct_predictions = float(np.mean(all_d == y_test))
-        print("Accuracy: {:g}".format(correct_predictions))
+        recall = recall_score(y_test, all_d, average='binary')
+        f1score = f1_score(y_test, all_d, average='binary')
+        print("Accuracy: {:g},recall: {:g},f1: {:g}".format(correct_predictions, recall, f1score))

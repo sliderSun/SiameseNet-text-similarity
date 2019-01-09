@@ -7,16 +7,23 @@ import tensorflow as tf
 
 from utils.input_helpers import InputHelper
 from siamese_network import SiameseNet
+from utils.modules import AdamWeightDecayOptimizer
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
-tf.flags.DEFINE_integer("embedding_dim", 300, "Dimensionality of character embedding (default: 300)")
+tf.flags.DEFINE_integer("embedding_dim", 64, "Dimensionality of character embedding (default: 64)")
 tf.flags.DEFINE_float("dropout_keep_prob", 0.8, "Dropout keep probability (default: 1.0)")
-tf.flags.DEFINE_float("l2_reg_lambda", 0.0, "L2 regularization lambda (default: 0.0)")
+tf.flags.DEFINE_float("learning_rate", 1e-3, "L2 regularization lambda (default: 0.0)")
 tf.flags.DEFINE_string("training_files", "./data/train.txt", "training file (default: None)")
 tf.flags.DEFINE_integer("hidden_units", 50, "Number of hidden units (default:50)")
 tf.flags.DEFINE_integer("max_document_length", 50, "max length of sentence (default:50)")
-tf.flags.DEFINE_integer("percent_dev", 10, "max length of sentence (default:50)")
+tf.flags.DEFINE_integer("percent_dev", 10, "percent_dev (default:10)")
+tf.flags.DEFINE_integer("n_layers", 3, "rnn layers (default:3)")
+tf.flags.DEFINE_string("initializer", "xavier", "initializer (default:xavier)")
+tf.flags.DEFINE_string("cell", "sru", "cell type (default:lstm)")
+tf.flags.DEFINE_integer("num_blocks", 6, " number of encoder/decoder blocks (default:6)")
+tf.flags.DEFINE_integer("num_heads", 8, " num_heads (default:8)")
+tf.flags.DEFINE_integer("num_units", 64, " alias = C (default:64)")
 
 # Training parameters
 tf.flags.DEFINE_integer("batch_size", 64, "Batch Size (default: 64)")
@@ -49,16 +56,13 @@ with tf.Graph().as_default():
     print("started session")
     with sess.as_default():
         siameseModel = SiameseNet(
-            sequence_length=FLAGS.max_document_length,
-            vocab_size=len(vocab_processor.vocabulary_),
-            embedding_size=FLAGS.embedding_dim,
-            hidden_units=FLAGS.hidden_units,
-            l2_reg_lambda=FLAGS.l2_reg_lambda,
-            batch_size=FLAGS.batch_size
+            config=FLAGS,
+            vocab_size=len(vocab_processor.vocabulary_)
         )
         # Define Training procedure
         global_step = tf.Variable(0, name="global_step", trainable=False)
-        optimizer = tf.train.AdamOptimizer(1e-3)
+        # optimizer = AdamWeightDecayOptimizer(learning_rate=FLAGS.learning_rate, weight_decay_rate=0.01)
+        optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.learning_rate)
         print("initialized siameseModel object")
 
     grads_and_vars = optimizer.compute_gradients(siameseModel.loss)
@@ -103,10 +107,11 @@ with tf.Graph().as_default():
     saver = tf.train.Saver(tf.global_variables(), max_to_keep=100)
 
     # Write vocabulary
-    vocab_processor.save(os.path.join(checkpoint_dir, "vocab"))
+    vocab_processor.save(os.path.join(checkpoint_dir, "vocab_"))
 
     # Initialize all variables
     sess.run(tf.global_variables_initializer())
+    sess.run(tf.local_variables_initializer())
 
     print("init all variables")
     graph_def = tf.get_default_graph().as_graph_def()
@@ -134,10 +139,12 @@ with tf.Graph().as_default():
                 siameseModel.dropout_keep_prob: FLAGS.dropout_keep_prob,
             }
         _, step, loss, accuracy, dist, sim, summaries = sess.run(
-            [tr_op_set, global_step, siameseModel.loss, siameseModel.accuracy, siameseModel.distance,
+            [tr_op_set, global_step, siameseModel.loss, siameseModel.accuracy,
+             siameseModel.distance,
              siameseModel.temp_sim, train_summary_op], feed_dict)
         time_str = datetime.datetime.now().isoformat()
-        print("TRAIN {}: step {}, loss {:g}, acc {:g}".format(time_str, step, loss, accuracy))
+        print(
+            "TRAIN {}: step {}, loss {:g}, acc {:g}".format(time_str, step, loss, accuracy))
         train_summary_writer.add_summary(summaries, step)
 
 
@@ -162,7 +169,8 @@ with tf.Graph().as_default():
         step, loss, accuracy, sim, summaries = sess.run(
             [global_step, siameseModel.loss, siameseModel.accuracy, siameseModel.temp_sim, dev_summary_op], feed_dict)
         time_str = datetime.datetime.now().isoformat()
-        print("DEV {}: step {}, loss {:g}, acc {:g}".format(time_str, step, loss, accuracy))
+        print(
+            "DEV {}: step {}, loss {:g}, acc {:g}".format(time_str, step, loss, accuracy))
         dev_summary_writer.add_summary(summaries, step)
         return accuracy
 
@@ -173,6 +181,7 @@ with tf.Graph().as_default():
 
     ptr = 0
     max_validation_acc = 0.0
+    count = 0
     for nn in range(sum_no_of_batches * FLAGS.num_epochs):
         batch = batches.__next__()
         if len(batch) < 1:
@@ -195,9 +204,13 @@ with tf.Graph().as_default():
                 acc = dev_step(x1_dev_b, x2_dev_b, y_dev_b)
 
                 sum_acc = sum_acc + acc
+
         if current_step % FLAGS.checkpoint_every == 0:
             if sum_acc >= max_validation_acc:
+                count += 1
                 max_validation_acc = sum_acc
                 saver.save(sess, checkpoint_prefix, global_step=current_step)
                 print("Saved model {} with sum_accuracy={} checkpoint to {}\n".format(nn, max_validation_acc,
                                                                                       checkpoint_prefix))
+        if count > 100:
+            break

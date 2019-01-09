@@ -1,4 +1,7 @@
+import six
 import tensorflow as tf
+
+from utils.modules import positional_encoding, multihead_attention, feedforward, gelu, swish
 
 
 class SiameseNet(object):
@@ -7,29 +10,26 @@ class SiameseNet(object):
     Uses an character embedding layer, followed by a biLSTM and Energy Loss layer.
     """
 
-    def BiRNN(self, x, dropout, scope, embedding_size, sequence_length, hidden_units):
-        n_hidden = hidden_units
-        n_layers = 3
+    def BiRNN(self, x, dropout, scope, sequence_length, hidden_units):
         # Prepare data shape to match `static_rnn` function requirements
         x = tf.unstack(tf.transpose(x, perm=[1, 0, 2]))
-        # Define lstm cells with tensorflow
-        # Forward direction cell
+
+        # Define rnn cells with tensorflow
         with tf.name_scope("fw" + scope), tf.variable_scope("fw" + scope):
             stacked_rnn_fw = []
-            for _ in range(n_layers):
-                fw_cell = tf.nn.rnn_cell.BasicLSTMCell(n_hidden, forget_bias=0.9, state_is_tuple=True)
+            for _ in range(self.config.n_layers):
+                fw_cell = self.cell(hidden_units)
                 lstm_fw_cell = tf.contrib.rnn.DropoutWrapper(fw_cell, output_keep_prob=dropout)
                 stacked_rnn_fw.append(lstm_fw_cell)
             lstm_fw_cell_m = tf.nn.rnn_cell.MultiRNNCell(cells=stacked_rnn_fw, state_is_tuple=True)
 
         with tf.name_scope("bw" + scope), tf.variable_scope("bw" + scope):
             stacked_rnn_bw = []
-            for _ in range(n_layers):
-                bw_cell = tf.nn.rnn_cell.BasicLSTMCell(n_hidden, forget_bias=0.9, state_is_tuple=True)
+            for _ in range(self.config.n_layers):
+                bw_cell = self.cell(hidden_units)
                 lstm_bw_cell = tf.contrib.rnn.DropoutWrapper(bw_cell, output_keep_prob=dropout)
                 stacked_rnn_bw.append(lstm_bw_cell)
             lstm_bw_cell_m = tf.nn.rnn_cell.MultiRNNCell(cells=stacked_rnn_bw, state_is_tuple=True)
-        # Get lstm cell output
 
         with tf.name_scope("bir" + scope), tf.variable_scope("bir" + scope):
             outputs, _, _ = tf.nn.static_bidirectional_rnn(lstm_fw_cell_m, lstm_bw_cell_m, x, dtype=tf.float32)
@@ -40,7 +40,7 @@ class SiameseNet(object):
             attention_b = tf.Variable(tf.constant(0.1, shape=[attention_size]), name='attention_b')
             u_list = []
             for t in range(sequence_length):
-                u_t = tf.nn.tanh(tf.matmul(outputs[t], attention_w) + attention_b)
+                u_t = self.get_activation("tanh")(tf.matmul(outputs[t], attention_w) + attention_b)
                 u_list.append(u_t)
             u_w = tf.Variable(tf.truncated_normal([attention_size, 1]), name='attention_uw')
             attn_z = []
@@ -54,75 +54,161 @@ class SiameseNet(object):
             alpha_trans = tf.reshape(tf.transpose(alpha, [1, 0]), [sequence_length, -1, 1])
             return tf.reduce_sum(outputs * alpha_trans, 0)
 
-    def contrastive_loss(self, y, d, batch_size):
+    @staticmethod
+    def contrastive_loss(y, d, batch_size):
         tmp = y * tf.square(d)
         # tmp= tf.mul(y,tf.square(d))
         tmp2 = (1 - y) * tf.square(tf.maximum((1 - d), 0))
         return tf.reduce_sum(tmp + tmp2) / batch_size / 2
 
-    def contro_loss(self, distance, input_y):
-        '''
-        总结下来对比损失的特点：首先看标签，然后标签为1是正对，负对部分损失为0，最小化总损失就是最小化类内损失(within_loss)部分，
-        让s逼近margin的过程，是个增大的过程；标签为0是负对，正对部分损失为0，最小化总损失就是最小化between_loss，而且此时between_loss就是s，
-        所以这个过程也是最小化s的过程，也就使不相似的对更不相似了
-        '''
-        one = tf.constant(1.0)
-        margin = 1.0
-        y_true = tf.to_float(input_y)
+    @staticmethod
+    def get_activation(activation_string):
+        """Maps a string to a Python function, e.g., "relu" => `tf.nn.relu`.
 
-        # 类内损失：
-        max_part = tf.square(tf.maximum(margin - distance, 0))  # margin是一个正对该有的相似度临界值
-        within_loss = tf.multiply(y_true, max_part)  # 如果相似度s未达到临界值margin，则最小化这个类内损失使s逼近这个margin，增大s
+        Args:
+          activation_string: String name of the activation function.
 
-        # 类间损失：
-        between_loss = tf.multiply(one - y_true,
-                                   distance)  # 如果是负对，between_loss就等于s，这时候within_loss=0，最小化损失就是降低相似度s使之更不相似
+        Returns:
+          A Python function corresponding to the activation function. If
+          `activation_string` is None, empty, or "linear", this will return None.
+          If `activation_string` is not a string, it will return `activation_string`.
 
-        # 总体损失（要最小化）：
-        loss = 0.5 * tf.reduce_mean(within_loss + between_loss)
-        return loss
+        Raises:
+          ValueError: The `activation_string` does not correspond to a known
+            activation.
+        """
 
-    def __init__(
-            self, sequence_length, vocab_size, embedding_size, hidden_units, l2_reg_lambda, batch_size):
+        # We assume that anything that"s not a string is already an activation
+        # function, so we just return it.
+        if not isinstance(activation_string, six.string_types):
+            return activation_string
 
+        if not activation_string:
+            return None
+
+        act = activation_string.lower()
+        if act == "linear":
+            return None
+        elif act == "relu":
+            return tf.nn.relu
+        elif act == "leaky_relu":
+            return tf.nn.leaky_relu
+        elif act == "gelu":
+            return gelu
+        elif act == "swish":
+            return swish
+        elif act == "tanh":
+            return tf.tanh
+        else:
+            raise ValueError("Unsupported activation: %s" % act)
+
+    def cell(self, n_hidden):
+        if self.config.cell == "sru":
+            fw_cell = tf.contrib.rnn.SRUCell(n_hidden)
+        elif self.config.cell == "gru":
+            fw_cell = tf.nn.rnn_cell.GRUCell(n_hidden)
+        elif self.config.cell == "indyLSTM":
+            fw_cell = tf.contrib.rnn.IndyLSTMCell(n_hidden)
+        else:
+            fw_cell = tf.nn.rnn_cell.LSTMCell(n_hidden, forget_bias=0.9, state_is_tuple=True)
+        return fw_cell
+
+    def cnn_layer(self, inputs, scope):
+        filters = [2, 3, 4, 5]
+        inputs = tf.expand_dims(inputs, axis=-1)
+        outputs = []
+        channel = self.config.num_units // len(filters)
+        for ii, width in enumerate(filters):
+            with tf.variable_scope(scope + "_cnn_{}_layer".format(ii)):
+                weight = tf.Variable(
+                    tf.truncated_normal([width, self.config.num_units, 1, channel], stddev=0.1, name='w'))
+                bias = tf.get_variable('bias', [channel], initializer=tf.constant_initializer(0.0))
+                output = tf.nn.conv2d(inputs, weight, strides=[1, 1, self.config.num_units, 1], padding='SAME')
+                output = tf.nn.bias_add(output, bias, data_format="NHWC")
+                output = self.get_activation("gelu")(output)
+                output = tf.reshape(output, shape=[-1, self.config.max_document_length, channel])
+                outputs.append(output)
+        outputs = tf.concat(outputs, axis=-1)
+        return outputs
+
+    def transformer(self, embed, value, scope):
+        with tf.variable_scope(scope + "_Transformer_Encoder"):
+            # Positional Encoding
+            embed += positional_encoding(value, num_units=self.config.num_units, zero_pad=False, scale=False,
+                                         scope=scope + "_post")
+            # Dropout
+            output = self.multi_head_block(embed, scope)
+            return output
+
+    def multi_head_block(self, query, scope, causality=False):
+        """
+        多头注意力机制
+        :param scope:
+        :param query:
+        :param causality:
+        :return:
+        """
+        for i in range(self.config.num_blocks):
+            with tf.variable_scope(scope + "_num_blocks_{}".format(i)):
+                # multi head Attention ( self-attention)
+                query = multihead_attention(
+                    queries=query, keys=query, num_units=self.config.num_units, num_heads=self.config.num_heads,
+                    dropout_rate=self.config.dropout_keep_prob, is_training=True, causality=causality,
+                    scope=scope + "self_attention")
+                # Feed Forward
+                query = feedforward(query, num_units=[4 * self.config.num_units, self.config.num_units])
+        return query
+
+    def __init__(self, config, vocab_size):
         # Placeholders for input, output and dropout
-        self.input_x1 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x1")
-        self.input_x2 = tf.placeholder(tf.int32, [None, sequence_length], name="input_x2")
+        self.config = config
+        self.input_x1 = tf.placeholder(tf.int32, [None, self.config.max_document_length], name="input_x1")
+        self.input_x2 = tf.placeholder(tf.int32, [None, self.config.max_document_length], name="input_x2")
         self.input_y = tf.placeholder(tf.float32, [None], name="input_y")
         self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
-
-        # Keeping track of l2 regularization loss (optional)
-        l2_loss = tf.constant(0.0, name="l2_loss")
+        self.initializer = None
+        if self.config.initializer == "normal":
+            self.initializer = tf.random_normal_initializer(mean=0.0, stddev=0.1)
+        elif self.config.initializer == "glorot":
+            self.initializer = tf.glorot_uniform_initializer()
+        elif self.config.initializer == "xavier":
+            self.initializer = tf.glorot_normal_initializer()
+        else:
+            raise ValueError("Unknown initializer")
 
         # Embedding layer
         with tf.name_scope("embedding"):
-            self.W = tf.Variable(
-                # tf.truncated_normal([vocab_size, embedding_size], stddev=0.1),
-                tf.random_uniform([vocab_size, embedding_size], -1.0, 1.0),
-                trainable=True, name="W")
+            self.W = tf.get_variable('lookup_table', dtype=tf.float32,
+                                     shape=[vocab_size, self.config.embedding_dim],
+                                     initializer=self.initializer,
+                                     trainable=True)
             self.embedded_chars1 = tf.nn.embedding_lookup(self.W, self.input_x1)
-            # self.embedded_chars_expanded1 = tf.expand_dims(self.embedded_chars1, -1)
             self.embedded_chars2 = tf.nn.embedding_lookup(self.W, self.input_x2)
-            # self.embedded_chars_expanded2 = tf.expand_dims(self.embedded_chars2, -1)
-
-        # Create a convolution + maxpool layer for each filter size
 
         with tf.name_scope("output"):
-            self.out1 = self.BiRNN(self.embedded_chars1, self.dropout_keep_prob, "side1", embedding_size,
-                                   sequence_length, hidden_units)
-            self.out2 = self.BiRNN(self.embedded_chars2, self.dropout_keep_prob, "side2", embedding_size,
-                                   sequence_length, hidden_units)
+            # add transformer layer
+            # output1 = self.transformer(self.embedded_chars1, self.input_x1, "side1")
+            # output2 = self.transformer(self.embedded_chars2, self.input_x2, "side2")
+            # add cnn layer
+            output1 = self.cnn_layer(self.embedded_chars1, "side1")
+            output2 = self.cnn_layer(self.embedded_chars2, "side2")
+
+            self.out1 = self.BiRNN(output1, self.dropout_keep_prob, "side1", self.config.max_document_length,
+                                   self.config.hidden_units)
+            self.out2 = self.BiRNN(output2, self.dropout_keep_prob, "side2", self.config.max_document_length,
+                                   self.config.hidden_units)
             self.distance = tf.sqrt(tf.reduce_sum(tf.square(tf.subtract(self.out1, self.out2)), 1, keepdims=True))
             self.distance = tf.div(self.distance,
                                    tf.add(tf.sqrt(tf.reduce_sum(tf.square(self.out1), 1, keepdims=True)),
                                           tf.sqrt(tf.reduce_sum(tf.square(self.out2), 1, keepdims=True))))
             self.distance = tf.reshape(self.distance, [-1], name="distance")
         with tf.name_scope("loss"):
-            self.loss = self.contrastive_loss(self.input_y, self.distance, batch_size)
-            # self.loss = self.contro_loss(self.distance, self.input_y)
-        #### Accuracy computation is outside of this class.
+            self.loss = self.contrastive_loss(self.input_y, self.distance, self.config.batch_size)
         with tf.name_scope("accuracy"):
             self.temp_sim = tf.subtract(tf.ones_like(self.distance), tf.round(self.distance),
                                         name="temp_sim")  # auto threshold 0.4
             correct_predictions = tf.equal(self.temp_sim, self.input_y)
             self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
+            self.r, _ = tf.metrics.recall(self.input_y, self.temp_sim, name='recall')
+            self.f1score = (2 * self.accuracy * self.r) / (self.accuracy + self.r)
+            self.confusion_matrix = tf.confusion_matrix(self.input_y, self.temp_sim)
